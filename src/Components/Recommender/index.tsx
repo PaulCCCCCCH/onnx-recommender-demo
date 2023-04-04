@@ -1,5 +1,5 @@
-import React, { useState, useCallback } from "react";
-import { Tensor } from "onnxruntime-web"
+import React, { useEffect, useState, useCallback } from "react";
+import { Tensor, InferenceSession } from "onnxruntime-web"
 import Login from "../Login";
 
 type UserFeature = {
@@ -39,37 +39,68 @@ const remoteMovieFeatureStore: { [key: string]: MovieFeature } = {
     }
 }
 
-function predictRating(userFeature: UserFeature, movieFeature: MovieFeature): number {
+async function getOnnxModel(modelPath: string) {
+    const fetchResult = await fetch(modelPath)
+    const model = await fetchResult.arrayBuffer()
+    return await InferenceSession.create(model, {executionProviders: ['wasm']});
+}
 
-    return 10
+
+async function predictRating(userFeature: UserFeature, movieFeature: MovieFeature, model: InferenceSession) {
+    const {age, gender, occupation} = userFeature
+    const {genre, actors} = movieFeature
+    const inputTensor = new Tensor('float32', [age].concat(gender, occupation, genre, actors))
+
+    const feeds: Record<string, Tensor> = {};
+    feeds[model.inputNames[0]] = inputTensor;
+    const output = await model.run(feeds);
+    return output[model.outputNames[0]]
 }
 
 export default function Recommender() {
 
     const [currUser, setCurrUser] = useState<string>("guest")
-    const [currMovie, setCurrMovie] = useState<string>("Movie X")
+    const [currMovie, ] = useState<string>("Movie X")
+    const [currRating, setCurrRating] = useState<number>()
+
+    const [model, setModel] = useState<InferenceSession>()
+    const modelPath = "/linear_reg_recommender.onnx"
+
+    useEffect(() => {
+        const getModel = async () => {
+            const model = await getOnnxModel(modelPath)
+            setModel(model) 
+        }
+        getModel().catch(console.error)
+    }, [])
+
+    useEffect(() => {
+        const userFeature = localUserFeatureStore[currUser]
+        
+        const movieFeature = remoteMovieFeatureStore[currMovie]
+
+        if (!userFeature || !movieFeature) {
+            return
+        } else if (!model) {
+            return
+        } else {
+            predictRating(userFeature, movieFeature, model).then(tensor => {
+                const outputNum = tensor.data as Float32Array
+                if (outputNum) setCurrRating(outputNum[0])
+            })
+        }
+    }, [currUser, currMovie, model])
+
 
     const onLogin = useCallback((newUsername: string) => {
         setCurrUser(newUsername)
     }, [])
 
-    const userFeature = localUserFeatureStore[currUser]
-    const movieFeature = remoteMovieFeatureStore[currMovie]
-    var ratingDOM;
-    if (!userFeature || !movieFeature) {
-        ratingDOM = <h1>User "{currUser}" not exist</h1>
-    } else {
-        const rating = predictRating(userFeature, movieFeature)
-        ratingDOM = <>         
-                <h2> User "{currUser}" might give "{currMovie}" a rate of {rating} </h2>
-            </>
-
-    }
-
     return (
         <>
             <Login onLogin={onLogin} />
-            {ratingDOM}
+            {currRating ? <h2>User "{currUser}"'s rating on movie "{currMovie}" is {currRating}</h2> : 
+            <h2> User not found </h2>}
         </>
     )
 }
