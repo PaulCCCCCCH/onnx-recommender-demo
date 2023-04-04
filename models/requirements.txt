@@ -1,0 +1,4 @@
+scikit-surprise
+scikit-learn
+numpy
+skl2onnx
